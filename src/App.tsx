@@ -1,0 +1,440 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import { useState, useEffect } from 'react';
+import { 
+  LayoutDashboard, 
+  Mail, 
+  TrendingUp, 
+  Cpu, 
+  ExternalLink, 
+  RefreshCw,
+  LogOut,
+  ChevronRight,
+  Inbox,
+  AlertCircle,
+  Eye,
+  Archive,
+  BarChart3
+} from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+import { 
+  LineChart, 
+  Line, 
+  XAxis, 
+  YAxis, 
+  CartesianGrid, 
+  Tooltip, 
+  ResponsiveContainer,
+  AreaChart,
+  Area
+} from 'recharts';
+import { format } from 'date-fns';
+import { 
+  collection, 
+  query, 
+  where, 
+  orderBy, 
+  onSnapshot, 
+  addDoc, 
+  doc, 
+  setDoc,
+  Timestamp,
+  serverTimestamp
+} from 'firebase/firestore';
+import { auth, db } from './lib/firebase';
+import { googleSignIn, logout, initAuth } from './lib/google-auth';
+
+// --- Components ---
+
+const PrestigeMetric = ({ title, value, icon: Icon }: any) => (
+  <div className="group space-y-3">
+    <div className="flex items-center gap-2">
+      <div className="w-1.5 h-1.5 bg-[var(--gulliver-blue)]" />
+      <span className="metric-label">{title}</span>
+    </div>
+    <div className="flex items-baseline gap-2">
+      <h3 className="font-serif text-4xl md:text-5xl font-extralight tracking-tighter">
+        {value}
+      </h3>
+      <Icon className="w-4 h-4 opacity-20 group-hover:opacity-100 transition-opacity" />
+    </div>
+  </div>
+);
+
+const CinematicInsight = ({ insight }: any) => (
+  <motion.div 
+    layout
+    initial={{ opacity: 0, y: 30 }}
+    animate={{ opacity: 1, y: 0 }}
+    className="group py-12 border-b border-[var(--cinematic-border)] last:border-0"
+  >
+    <div className="grid grid-cols-1 md:grid-cols-12 gap-8 items-start">
+      <div className="md:col-span-3 space-y-4">
+        <div className="flex flex-col gap-1">
+          <span className="metric-label text-[9px] opacity-40">Classification</span>
+          <span className="font-serif italic text-lg text-[var(--gulliver-blue)]">
+            {insight.category}
+          </span>
+        </div>
+        <div className="flex flex-col gap-1">
+          <span className="metric-label text-[9px] opacity-40">Impact Priority</span>
+          <div className="flex gap-1">
+            {[...Array(5)].map((_, i) => (
+              <div 
+                key={i} 
+                className={`w-4 h-[2px] ${i < insight.importance ? 'bg-[var(--cinematic-text)]' : 'bg-[var(--cinematic-border)]'}`} 
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="md:col-span-7 space-y-4">
+        <div className="space-y-2">
+          <span className="prestige-label font-serif uppercase tracking-widest text-[10px]">
+            {format(new Date(insight.date), 'MMMM d, yyyy')} // {insight.sender?.split('<')[0]}
+          </span>
+          <h4 className="text-2xl md:text-3xl font-serif font-light leading-snug group-hover:text-[var(--gulliver-blue)] transition-colors cursor-pointer">
+            {insight.subject}
+          </h4>
+        </div>
+        <p className="font-serif text-xl text-[var(--cinematic-muted)] leading-relaxed max-w-2xl font-light">
+          {insight.summary}
+        </p>
+      </div>
+
+      <div className="md:col-span-2 flex md:justify-end items-center">
+        <a 
+          href={insight.link} 
+          target="_blank" 
+          rel="noopener noreferrer"
+          className="w-12 h-12 flex items-center justify-center rounded-full border border-[var(--cinematic-border)] hover:bg-[var(--gulliver-blue)] hover:border-[var(--gulliver-blue)] hover:text-white transition-all transform hover:rotate-45"
+        >
+          <ExternalLink className="w-5 h-5" />
+        </a>
+      </div>
+    </div>
+  </motion.div>
+);
+
+// --- Main App ---
+
+export default function App() {
+  const [user, setUser] = useState<any>(null);
+  const [token, setToken] = useState<string | null>(null);
+  const [insights, setInsights] = useState<any[]>([]);
+  const [scanning, setScanning] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [lastScanAt, setLastScanAt] = useState<Date | null>(null);
+
+  useEffect(() => {
+    const unsubscribe = initAuth(
+      (u, t) => {
+        setUser(u);
+        setToken(t);
+        setLoading(false);
+      },
+      () => {
+        setLoading(false);
+      }
+    );
+    return () => unsubscribe();
+  }, []);
+
+  // Track scanning metadata
+  useEffect(() => {
+    if (!user) return;
+    const unsubscribe = onSnapshot(doc(db, 'user_scans', user.uid), (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        if (data.lastScanAt) {
+          setLastScanAt(data.lastScanAt.toDate());
+        }
+      }
+    }, (error) => {
+      console.error('Firestore user_scans Error: ', JSON.stringify({
+        error: error.message,
+        operationType: 'get',
+        path: `user_scans/${user.uid}`,
+        authInfo: { userId: user.uid }
+      }));
+    });
+    return () => unsubscribe();
+  }, [user]);
+
+  // Auto-scan on load or periodic check
+  useEffect(() => {
+    const checkAndSync = () => {
+      if (user && token && !scanning && !loading) {
+        const now = new Date();
+        const oneHour = 60 * 60 * 1000;
+        if (!lastScanAt || (now.getTime() - lastScanAt.getTime()) > oneHour) {
+          console.log("Stale cache detected. Synchronizing archive...");
+          startScan();
+        }
+      }
+    };
+
+    // Initial check
+    checkAndSync();
+
+    // Periodic check every 15 minutes
+    const interval = setInterval(checkAndSync, 15 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [user, token, lastScanAt, loading, scanning]);
+
+  useEffect(() => {
+    if (!user) {
+      setInsights([]);
+      return;
+    }
+
+    const oneWeekAgo = new Date();
+    oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+
+    const q = query(
+      collection(db, 'insights'),
+      where('userId', '==', user.uid),
+      where('date', '>=', oneWeekAgo.toISOString()),
+      orderBy('date', 'desc')
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setInsights(data);
+    }, (error) => {
+      console.error('Firestore insights Error: ', JSON.stringify({
+        error: error.message,
+        operationType: 'list',
+        path: 'insights',
+        authInfo: { userId: user.uid }
+      }));
+    });
+
+    return () => unsubscribe();
+  }, [user]);
+
+  const handleLogin = async () => {
+    try {
+      const res = await googleSignIn();
+      if (res) {
+        setUser(res.user);
+        setToken(res.accessToken);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const startScan = async () => {
+    if (!token) return;
+    setScanning(true);
+    try {
+      const res = await fetch('/api/scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accessToken: token })
+      });
+
+      if (!res.ok) throw new Error('Scan failed');
+      
+      const { insights: newInsights } = await res.json();
+      
+      // Update batch logic
+      const batchPromises = newInsights.map((item: any) => {
+        const docId = `${user.uid}_${item.id}`;
+        return setDoc(doc(db, 'insights', docId), {
+          ...item,
+          userId: user.uid,
+          createdAt: serverTimestamp()
+        }, { merge: true });
+      });
+
+      await Promise.all(batchPromises);
+
+      // Record successful scan
+      await setDoc(doc(db, 'user_scans', user.uid), {
+        lastScanAt: serverTimestamp(),
+        userId: user.uid,
+        status: 'idle'
+      }, { merge: true });
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setScanning(false);
+    }
+  };
+
+  if (loading) return null;
+
+  if (!user) {
+    return (
+      <div className="min-h-screen flex flex-col bg-[var(--cinematic-bg)] bg-dots">
+        <div className="film-grain" />
+        <div className="flex-1 flex flex-col items-center justify-center a24-container">
+          <motion.div 
+            initial={{ opacity: 0, y: 40 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 1, ease: [0.16, 1, 0.3, 1] }}
+            className="text-center space-y-16 max-w-2xl"
+          >
+            <div className="space-y-4">
+              <span className="font-sans tracking-[0.4em] uppercase text-[10px] font-bold opacity-30">
+                Gulliver Preparatory School
+              </span>
+              <h1 className="text-7xl md:text-9xl font-serif tracking-tighter leading-none italic font-extralight">
+                AI <span className="not-italic font-medium text-[var(--gulliver-blue)]">Intelligence</span>
+              </h1>
+            </div>
+            
+            <div className="space-y-8">
+              <p className="font-serif text-2xl text-[var(--cinematic-muted)] leading-relaxed font-extralight">
+                A prestigious research hub synthesizing intelligence for the next generation of academic excellence.
+              </p>
+              
+              <div className="flex flex-col items-center gap-6">
+                <button 
+                  onClick={handleLogin} 
+                  className="btn-raider w-full md:w-auto"
+                >
+                  <span className="flex items-center justify-center gap-3">
+                    <Mail className="w-4 h-4" />
+                    Enter Research Archive
+                  </span>
+                </button>
+                <div className="h-[1px] w-24 bg-[var(--cinematic-border)]" />
+                <span className="font-sans text-[9px] uppercase tracking-[0.3em] opacity-30">
+                  Established 2026 // RAIDER NATION
+                </span>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      </div>
+    );
+  }
+
+  // --- Dashboard View ---
+  
+  const totalInsights = insights.length;
+  const highImportance = insights.filter(i => i.importance >= 4).length;
+  const activeCategories = Array.from(new Set(insights.map(i => i.category))).length;
+
+  return (
+    <div className="min-h-screen pb-40">
+      <div className="film-grain" />
+      
+      {/* Header */}
+      <header className="py-12 border-b border-[var(--cinematic-border)]">
+        <div className="a24-container flex flex-col md:flex-row justify-between items-end gap-12">
+          <div className="space-y-4 text-reveal">
+            <div className="flex items-center gap-4">
+              <span className="font-sans font-bold text-[10px] uppercase tracking-[0.4em] text-[var(--gulliver-blue)]">
+                The Archive
+              </span>
+              <div className="h-[1px] w-12 bg-[var(--gulliver-blue)]/20" />
+            </div>
+            <h1 className="text-5xl md:text-6xl font-serif italic font-extralight tracking-tight leading-none">
+              Gulliver <span className="not-italic font-medium text-[var(--cinematic-text)]">Intelligence</span>
+            </h1>
+          </div>
+          
+          <div className="flex items-center gap-8 border-l border-[var(--cinematic-border)] pl-8">
+            <button 
+              onClick={startScan} 
+              disabled={scanning}
+              className="group flex flex-col items-start gap-2"
+            >
+              <span className="metric-label opacity-40 group-hover:opacity-100 transition-opacity">
+                {scanning ? 'System Synchronizing...' : `Last Archive Sync: ${lastScanAt ? format(lastScanAt, 'MMM d, h:mm a') : 'Never'}`}
+              </span>
+              <span className="flex items-center gap-2 font-serif italic text-lg group-hover:text-[var(--gulliver-blue)] transition-colors">
+                <RefreshCw className={`w-4 h-4 ${scanning ? 'animate-spin' : ''}`} />
+                {scanning ? 'Updating...' : 'Sync Intelligence'}
+              </span>
+            </button>
+            
+            <button 
+              onClick={logout} 
+              className="p-3 border border-[var(--cinematic-border)] hover:bg-black hover:text-white transition-all rounded-full"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Grid */}
+      <main className="a24-container mt-24">
+        {/* Metrics Bar */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-12 md:gap-24 mb-32">
+          <div className="md:col-span-3 grid grid-cols-2 lg:grid-cols-4 gap-12">
+            <PrestigeMetric title="Total Insights" value={totalInsights} icon={Archive} />
+            <PrestigeMetric title="Critical High Priority" value={highImportance} icon={BarChart3} />
+            <PrestigeMetric title="Knowledge Fields" value={activeCategories} icon={Eye} />
+            <PrestigeMetric title="Archive Health" value="100%" icon={Cpu} />
+          </div>
+          <div className="flex flex-col justify-end space-y-4">
+             <span className="metric-label opacity-30 leading-relaxed text-[8px]">
+               Gulliver Prep Artificial Intelligence Research Facility. Monitoring data streams for educational excellence.
+             </span>
+          </div>
+        </div>
+
+        {/* Content Section */}
+        <div className="space-y-32">
+          {/* Feed */}
+          <section>
+            <div className="flex items-center gap-6 mb-16">
+              <h2 className="font-serif italic text-4xl">Intelligence Stream</h2>
+              <div className="flex-1 h-[1px] bg-[var(--cinematic-border)]" />
+              <div className="font-sans text-[10px] font-bold opacity-30 uppercase tracking-widest">
+                {insights.length} Entries Documented
+              </div>
+            </div>
+
+            <div className="min-h-[400px]">
+              <AnimatePresence mode="popLayout">
+                {insights.length > 0 ? (
+                  insights.map((insight) => (
+                    <CinematicInsight key={insight.id} insight={insight} />
+                  ))
+                ) : (
+                  <div className="py-40 text-center space-y-6">
+                    <div className="w-px h-24 bg-[var(--cinematic-border)] mx-auto" />
+                    <p className="font-serif italic text-2xl opacity-20">The archive awaits synchronization...</p>
+                  </div>
+                )}
+              </AnimatePresence>
+            </div>
+          </section>
+
+          {/* Footer Card */}
+          <div className="cinematic-card !p-20 text-center space-y-12 bg-gray-50 border-none shadow-none grayscale hover:grayscale-0 transition-all">
+            <div className="space-y-4">
+              <span className="metric-label opacity-40">System Status</span>
+              <h3 className="text-4xl md:text-5xl font-serif italic text-[var(--gulliver-blue)]">Excellence through Innovation.</h3>
+            </div>
+            <div className="flex justify-center gap-12 font-sans text-[10px] font-bold opacity-20 uppercase tracking-[0.3em]">
+              <span>Portal Alpha V3.0</span>
+              <span>Gulliver Preparatory</span>
+              <span>Miami, FL</span>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      <footer className="mt-40 mb-20 text-center">
+        <div className="a24-container">
+          <div className="h-px w-full bg-[var(--cinematic-border)] mb-12" />
+          <p className="font-sans text-[9px] uppercase tracking-[0.5em] opacity-40">
+            Produced by Gulliver AI Research Facility // 2026
+          </p>
+        </div>
+      </footer>
+    </div>
+  );
+}
