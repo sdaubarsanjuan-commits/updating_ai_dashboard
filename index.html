@@ -1,0 +1,43 @@
+{
+  "entities": {
+    "insight": {
+      "title": "AI Insight",
+      "description": "An AI-related education insight extracted from Gmail",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "subject": { "type": "string" },
+        "sender": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" },
+        "summary": { "type": "string" },
+        "category": { "type": "string", "enum": ["Tool", "Research", "Policy", "News", "Other"] },
+        "importance": { "type": "number" },
+        "link": { "type": "string" },
+        "userId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["subject", "summary", "category", "link", "userId", "createdAt"]
+    },
+    "user_scan": {
+      "title": "User Scan Info",
+      "description": "Last scan information for the user",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "lastScanAt": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["idle", "scanning", "error"] }
+      },
+      "required": ["userId", "lastScanAt", "status"]
+    }
+  },
+  "firestore": {
+    "/insights/{insightId}": {
+      "schema": "insight",
+      "description": "Collection of extracted AI insights"
+    },
+    "/user_scans/{userId}": {
+      "schema": "user_scan",
+      "description": "Metadata about user scans"
+    }
+  }
+}
