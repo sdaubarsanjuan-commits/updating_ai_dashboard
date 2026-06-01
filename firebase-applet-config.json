@@ -1,2 +1,9 @@
-# EDU_AI_INSIGHT_DASHBOARD_VARS
-# Add your environment variables here
+{
+  "projectId": "gen-lang-client-0790891694",
+  "appId": "1:378032219524:web:34354b3f34c3201aa7a9d1",
+  "authDomain": "gen-lang-client-0790891694.firebaseapp.com",
+  "firestoreDatabaseId": "ai-studio-88a1b6f5-a928-43b6-8122-20ca4848a6dd",
+  "storageBucket": "gen-lang-client-0790891694.firebasestorage.app",
+  "messagingSenderId": "378032219524",
+  "measurementId": ""
+}
